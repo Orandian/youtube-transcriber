@@ -219,6 +219,51 @@ async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
   return null;
 }
 
+// Parse lang_code + optional kind from timedtext list XML
+function parseTrackList(xml: string): { lang: string; kind: string }[] {
+  const out: { lang: string; kind: string }[] = [];
+  for (const m of xml.matchAll(/<track\s([^>]+)>/g)) {
+    const lang = m[1].match(/lang_code="([^"]+)"/)?.[1];
+    const kind = m[1].match(/kind="([^"]+)"/)?.[1] ?? "";
+    if (lang) out.push({ lang, kind });
+  }
+  return out;
+}
+
+// Strategy: timedtext list (discovers available languages without InnerTube)
+async function tryTimedTextList(
+  videoId: string,
+): Promise<CaptionTrack[] | null> {
+  try {
+    const r = await fetch(
+      `https://www.youtube.com/api/timedtext?v=${videoId}&type=list`,
+      { headers: BROWSER_HEADERS, cache: "no-store" },
+    );
+    if (!r.ok) return null;
+    const xml = await r.text();
+    const trackList = parseTrackList(xml);
+    console.log(
+      `[transcript] timedtext list: ${trackList.map((t) => t.lang + (t.kind ? "/" + t.kind : "")).join(", ")}`,
+    );
+    if (trackList.length === 0) return null;
+
+    // Prefer English, fall back to whatever is available
+    const preferred =
+      trackList.find((t) => t.lang === "en" || t.lang === "en-US") ??
+      trackList[0];
+
+    return [
+      {
+        languageCode: preferred.lang,
+        baseUrl: `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${preferred.lang}${preferred.kind ? "&kind=" + preferred.kind : ""}&name=&fmt=srv3`,
+      },
+    ];
+  } catch (e) {
+    console.log(`[transcript] timedtext list error: ${e}`);
+    return null;
+  }
+}
+
 async function tryWatchPage(
   videoId: string,
 ): Promise<{ tracks: CaptionTrack[]; cookies: string } | null> {
@@ -251,6 +296,9 @@ export async function fetchTranscript(
   let cookies = "";
 
   tracks = await tryInnerTube(videoId);
+
+  // Discover available languages via timedtext list — works regardless of IP
+  if (!tracks) tracks = await tryTimedTextList(videoId);
 
   if (!tracks) {
     const result = await tryWatchPage(videoId);

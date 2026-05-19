@@ -132,24 +132,46 @@ async function fetchViaApiRoute(
   return null;
 }
 
-// ── Strategy 2: timedtext GET directly from browser (CORS-enabled GET) ────────
+// ── Strategy 2: timedtext (language-aware) ────────────────────────────────────
 async function fetchTimedText(
   videoId: string,
 ): Promise<{ text: string; offsetMs: number; durationMs: number }[] | null> {
-  const candidates = [
-    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json3`,
-    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&kind=asr&fmt=json3`,
-    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&fmt=json3`,
-    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&kind=asr&fmt=json3`,
+  // Step 1: discover available languages via timedtext list (CORS-enabled)
+  let langCandidates: { lang: string; kind: string }[] = [];
+  try {
+    const listRes = await fetch(
+      `https://www.youtube.com/api/timedtext?v=${videoId}&type=list`,
+    );
+    if (listRes.ok) {
+      const xml = await listRes.text();
+      for (const m of xml.matchAll(/<track\s([^>]+)>/g)) {
+        const lang = m[1].match(/lang_code="([^"]+)"/)?.[1];
+        const kind = m[1].match(/kind="([^"]+)"/)?.[1] ?? "";
+        if (lang) langCandidates.push({ lang, kind });
+      }
+      console.log(
+        `[useTranscript] timedtext list: ${langCandidates.map((t) => t.lang).join(",")}`,
+      );
+    }
+  } catch {}
+
+  // Prefer English, fall back to whatever is available, finally try en anyway
+  const ordered = [
+    ...langCandidates.filter((t) => t.lang === "en" || t.lang === "en-US"),
+    ...langCandidates.filter((t) => t.lang !== "en" && t.lang !== "en-US"),
+    { lang: "en", kind: "" },
+    { lang: "en", kind: "asr" },
   ];
-  for (const url of candidates) {
+
+  for (const { lang, kind } of ordered) {
     try {
+      const url = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${lang}${kind ? "&kind=" + kind : ""}&name=&fmt=json3`;
       const r = await fetch(url);
       if (!r.ok) continue;
       const data = await r.json();
       const entries = parseJson3(data);
       if (entries.length > 0) {
-        console.log(`[useTranscript] timedtext OK`);
+        console.log(`[useTranscript] timedtext OK lang=${lang}`);
         return entries;
       }
     } catch (e) {
