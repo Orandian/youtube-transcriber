@@ -232,9 +232,10 @@ function parseTrackList(xml: string): { lang: string; kind: string }[] {
 }
 
 // Strategy: timedtext list (discovers available languages without InnerTube)
-async function tryTimedTextList(
-  videoId: string,
-): Promise<CaptionTrack[] | null> {
+async function tryTimedTextList(videoId: string): Promise<{
+  tracks: CaptionTrack[] | null;
+  debug: string;
+}> {
   try {
     const r = await fetch(
       `https://www.youtube.com/api/timedtext?v=${videoId}&type=list`,
@@ -244,28 +245,33 @@ async function tryTimedTextList(
         cache: "no-store",
       },
     );
-    if (!r.ok) return null;
+    if (!r.ok) return { tracks: null, debug: `list_http=${r.status}` };
+
     const xml = await r.text();
     const trackList = parseTrackList(xml);
-    console.log(
-      `[transcript] timedtext list: ${trackList.map((t) => t.lang + (t.kind ? "/" + t.kind : "")).join(", ")}`,
-    );
-    if (trackList.length === 0) return null;
+    const langs = trackList
+      .map((t) => t.lang + (t.kind ? "/" + t.kind : ""))
+      .join(",");
+    console.log(`[transcript] timedtext list: [${langs}]`);
 
-    // Prefer English, fall back to whatever is available
+    if (trackList.length === 0)
+      return { tracks: null, debug: `list_empty xml_len=${xml.length}` };
+
     const preferred =
       trackList.find((t) => t.lang === "en" || t.lang === "en-US") ??
       trackList[0];
 
-    return [
-      {
-        languageCode: preferred.lang,
-        baseUrl: `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${preferred.lang}${preferred.kind ? "&kind=" + preferred.kind : ""}&name=&fmt=srv3`,
-      },
-    ];
+    return {
+      tracks: [
+        {
+          languageCode: preferred.lang,
+          baseUrl: `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${preferred.lang}${preferred.kind ? "&kind=" + preferred.kind : ""}&name=&fmt=srv3`,
+        },
+      ],
+      debug: `list_ok langs=[${langs}]`,
+    };
   } catch (e) {
-    console.log(`[transcript] timedtext list error: ${e}`);
-    return null;
+    return { tracks: null, debug: `list_error=${e}` };
   }
 }
 
@@ -301,12 +307,12 @@ export async function fetchTranscript(
   let cookies = "";
 
   // Run concurrently: InnerTube has 2.5s timeouts, timedtext list is fast.
-  // timedtext often wins the race and doesn't have cloud-IP restrictions.
-  const [it, tt] = await Promise.all([
+  const [it, ttResult] = await Promise.all([
     tryInnerTube(videoId).catch(() => null),
-    tryTimedTextList(videoId).catch(() => null),
+    tryTimedTextList(videoId),
   ]);
-  tracks = it ?? tt;
+  tracks = it ?? ttResult.tracks;
+  const timedTextDebug = ttResult.debug;
 
   if (!tracks) {
     const result = await tryWatchPage(videoId);
@@ -318,10 +324,7 @@ export async function fetchTranscript(
 
   if (!tracks)
     throw new Error(
-      "No captions available for this video [keys:" +
-        (YT_ANDROID_KEY ? "android" : "") +
-        (YT_WEB_KEY ? "+web" : "") +
-        "]",
+      `No captions available. keys=${YT_ANDROID_KEY ? "android" : ""}${YT_WEB_KEY ? "+web" : ""} ${timedTextDebug}`,
     );
 
   const track =
