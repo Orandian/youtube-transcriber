@@ -16,6 +16,8 @@ const INNERTUBE_CLIENTS: {
   url: string;
   name: string;
   version: string;
+  androidSdkVersion?: number;
+  userAgent?: string;
   extraHeaders: Record<string, string>;
 }[] = [
   ...(YT_ANDROID_KEY
@@ -24,6 +26,9 @@ const INNERTUBE_CLIENTS: {
           url: `https://youtubei.googleapis.com/youtubei/v1/player?key=${YT_ANDROID_KEY}&prettyPrint=false`,
           name: "ANDROID",
           version: "20.10.38",
+          androidSdkVersion: 30,
+          userAgent:
+            "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
           extraHeaders: {
             "X-YouTube-Client-Name": "3",
             "X-YouTube-Client-Version": "20.10.38",
@@ -178,6 +183,10 @@ async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
             client: {
               clientName: client.name,
               clientVersion: client.version,
+              ...(client.androidSdkVersion
+                ? { androidSdkVersion: client.androidSdkVersion }
+                : {}),
+              ...(client.userAgent ? { userAgent: client.userAgent } : {}),
               hl: "en",
               gl: "US",
             },

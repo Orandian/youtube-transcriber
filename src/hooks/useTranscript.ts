@@ -175,6 +175,9 @@ async function fetchViaInnerTube(
             ctx: {
               clientName: "ANDROID",
               clientVersion: "20.10.38",
+              androidSdkVersion: 30,
+              userAgent:
+                "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
               hl: "en",
               gl: "US",
             },
