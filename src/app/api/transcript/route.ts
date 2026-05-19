@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     }
 
     return Response.json(
-      { error: "Failed to fetch transcript." },
+      { error: "Failed to fetch transcript.", detail: message },
       { status: 500 },
     );
   }
