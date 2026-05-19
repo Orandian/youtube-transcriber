@@ -285,6 +285,79 @@ async function fetchViaInnerTube(
   return null;
 }
 
+const INVIDIOUS_INSTANCES = [
+  "https://inv.tux.pizza",
+  "https://yt.artemislena.eu",
+  "https://invidious.slipfox.xyz",
+  "https://vid.puffyan.us",
+];
+
+function parseVtt(
+  vtt: string,
+): { text: string; offsetMs: number; durationMs: number }[] {
+  const results: { text: string; offsetMs: number; durationMs: number }[] = [];
+  function parseTs(ts: string): number {
+    const parts = ts.trim().replace(",", ".").split(":");
+    if (parts.length === 3)
+      return (
+        (parseInt(parts[0]) * 3600 +
+          parseInt(parts[1]) * 60 +
+          parseFloat(parts[2])) *
+        1000
+      );
+    return (parseInt(parts[0]) * 60 + parseFloat(parts[1])) * 1000;
+  }
+  const lines = vtt.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const m = lines[i].trim().match(/^([\d:.,]+)\s+-->\s+([\d:.,]+)/);
+    if (m) {
+      const startMs = parseTs(m[1]);
+      const endMs = parseTs(m[2]);
+      i++;
+      const textLines: string[] = [];
+      while (i < lines.length && lines[i].trim() !== "") {
+        const t = lines[i].trim().replace(/<[^>]+>/g, "");
+        if (t) textLines.push(t);
+        i++;
+      }
+      const text = textLines.join(" ").trim();
+      if (text)
+        results.push({ text, offsetMs: startMs, durationMs: endMs - startMs });
+    } else {
+      i++;
+    }
+  }
+  return results;
+}
+
+async function fetchViaInvidious(
+  videoId: string,
+): Promise<TranscriptLine[] | null> {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const listRes = await fetch(`${instance}/api/v1/captions/${videoId}`);
+      if (!listRes.ok) continue;
+      const data = (await listRes.json()) as {
+        captions?: { label: string; language_code: string; url: string }[];
+      };
+      if (!Array.isArray(data.captions) || data.captions.length === 0) continue;
+      const cap =
+        data.captions.find((c) => c.language_code.startsWith("en")) ??
+        data.captions[0];
+      const vttRes = await fetch(`${instance}${cap.url}`);
+      if (!vttRes.ok) continue;
+      const entries = parseVtt(await vttRes.text());
+      if (entries.length === 0) continue;
+      console.log(`[useTranscript] invidious OK (${instance})`);
+      return toLines(entries);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 export function useTranscript(videoId: string) {
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const [status, setStatus] = useState<TranscriptStatus>("loading");
@@ -315,9 +388,17 @@ export function useTranscript(videoId: string) {
 
         // 3. Browser-direct InnerTube via googleapis.com (has CORS headers)
         const innerTubeEntries = await fetchViaInnerTube(videoId);
-        if (cancelled) return;
-        if (innerTubeEntries && innerTubeEntries.length > 0) {
+        if (!cancelled && innerTubeEntries && innerTubeEntries.length > 0) {
           setLines(toLines(innerTubeEntries));
+          setStatus("ready");
+          return;
+        }
+
+        // 4. Invidious proxy (CORS-enabled, non-cloud servers)
+        const invLines = await fetchViaInvidious(videoId);
+        if (cancelled) return;
+        if (invLines && invLines.length > 0) {
+          setLines(invLines);
           setStatus("ready");
           return;
         }

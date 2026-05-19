@@ -289,6 +289,95 @@ async function tryWatchPage(
   }
 }
 
+// Invidious instances — open YouTube frontends with CORS-enabled APIs
+// that run on non-cloud residential-adjacent servers, bypassing IP blocks.
+const INVIDIOUS_INSTANCES = [
+  "https://inv.tux.pizza",
+  "https://yt.artemislena.eu",
+  "https://invidious.slipfox.xyz",
+  "https://vid.puffyan.us",
+];
+
+function parseVtt(vtt: string): RawEntry[] {
+  const results: RawEntry[] = [];
+  function parseTs(ts: string): number {
+    const parts = ts.trim().replace(",", ".").split(":");
+    if (parts.length === 3)
+      return (
+        (parseInt(parts[0]) * 3600 +
+          parseInt(parts[1]) * 60 +
+          parseFloat(parts[2])) *
+        1000
+      );
+    return (parseInt(parts[0]) * 60 + parseFloat(parts[1])) * 1000;
+  }
+  const lines = vtt.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const m = lines[i].trim().match(/^([\d:.,]+)\s+-->\s+([\d:.,]+)/);
+    if (m) {
+      const startMs = parseTs(m[1]);
+      const endMs = parseTs(m[2]);
+      i++;
+      const textLines: string[] = [];
+      while (i < lines.length && lines[i].trim() !== "") {
+        const t = lines[i].trim().replace(/<[^>]+>/g, "");
+        if (t) textLines.push(t);
+        i++;
+      }
+      const text = textLines.join(" ").trim();
+      if (text)
+        results.push({ text, offsetMs: startMs, durationMs: endMs - startMs });
+    } else {
+      i++;
+    }
+  }
+  return results;
+}
+
+async function tryInvidious(videoId: string): Promise<TranscriptLine[] | null> {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const listRes = await fetch(`${instance}/api/v1/captions/${videoId}`, {
+        signal: AbortSignal.timeout(5000),
+        cache: "no-store",
+      });
+      if (!listRes.ok) continue;
+      const data = (await listRes.json()) as {
+        captions?: { label: string; language_code: string; url: string }[];
+      };
+      if (!Array.isArray(data.captions) || data.captions.length === 0) continue;
+
+      const cap =
+        data.captions.find((c) => c.language_code.startsWith("en")) ??
+        data.captions[0];
+
+      const vttRes = await fetch(`${instance}${cap.url}`, {
+        signal: AbortSignal.timeout(5000),
+        cache: "no-store",
+      });
+      if (!vttRes.ok) continue;
+
+      const entries = parseVtt(await vttRes.text());
+      if (entries.length === 0) continue;
+
+      console.log(`[transcript] invidious OK (${instance})`);
+      return entries.map(({ text, offsetMs, durationMs }) => {
+        const { speaker, cleanText } = detectSpeaker(text);
+        return {
+          text: cleanText,
+          offset: offsetMs,
+          duration: durationMs,
+          ...(speaker ? { speaker } : {}),
+        };
+      });
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 export async function fetchTranscript(
   videoId: string,
 ): Promise<TranscriptLine[]> {
@@ -309,6 +398,11 @@ export async function fetchTranscript(
       tracks = result.tracks;
       cookies = result.cookies;
     }
+  }
+
+  if (!tracks) {
+    const inv = await tryInvidious(videoId);
+    if (inv) return inv;
   }
 
   if (!tracks)
