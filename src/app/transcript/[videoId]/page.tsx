@@ -15,7 +15,12 @@ export default async function TranscriptPage({ params }: PageProps) {
   let lines: TranscriptLine[];
   try {
     lines = await fetchTranscript(videoId);
-  } catch {
+  } catch (err) {
+    console.error(
+      "[transcript]",
+      videoId,
+      err instanceof Error ? err.message : err,
+    );
     lines = [];
   }
 
