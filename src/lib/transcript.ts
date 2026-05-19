@@ -49,18 +49,7 @@ const INNERTUBE_CLIENTS: {
         },
       ]
     : []),
-  {
-    url: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
-    name: "ANDROID",
-    version: "20.10.38",
-    extraHeaders: {},
-  },
-  {
-    url: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
-    name: "WEB",
-    version: "2.20231010.04.01",
-    extraHeaders: {},
-  },
+  // www.youtube.com always returns LOGIN_REQUIRED from cloud IPs — omitted.
 ];
 
 const SPEAKER_REGEX = /^\[([^\]]+)\]:\s*|^([A-Z][a-zA-Z\s]+):\s+/;
