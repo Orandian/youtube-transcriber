@@ -10,7 +10,7 @@ const BROWSER_HEADERS = {
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 };
 
-const CLIENTS = [
+const INNERTUBE_CLIENTS = [
   { name: "ANDROID", version: "20.10.38" },
   { name: "IOS", version: "19.45.4" },
   { name: "WEB", version: "2.20231010.04.01" },
@@ -45,6 +45,10 @@ interface RawEntry {
   text: string;
   offsetMs: number;
   durationMs: number;
+}
+interface CaptionTrack {
+  languageCode: string;
+  baseUrl: string;
 }
 
 function parseCaptionXml(xml: string): RawEntry[] {
@@ -84,28 +88,44 @@ function parseCaptionXml(xml: string): RawEntry[] {
   return results;
 }
 
-// Fetch a VISITOR_DATA token from YouTube so InnerTube requests look like a real session.
-// Without this, cloud IPs get LOGIN_REQUIRED for many videos.
-async function getVisitorData(): Promise<string | null> {
-  try {
-    const html = await fetch("https://www.youtube.com/", {
-      headers: BROWSER_HEADERS,
-      cache: "no-store",
-    }).then((r) => r.text());
-    return html.match(/"VISITOR_DATA":"([^"]+)"/)?.[1] ?? null;
-  } catch {
-    return null;
+// Properly extract a top-level JSON object assigned to `var NAME = {...}` in HTML
+function parseInlineJson(
+  html: string,
+  varName: string,
+): Record<string, unknown> | null {
+  const token = `var ${varName} = `;
+  const start = html.indexOf(token);
+  if (start === -1) return null;
+  const jsonStart = start + token.length;
+  let depth = 0;
+  for (let i = jsonStart; i < html.length; i++) {
+    if (html[i] === "{") depth++;
+    else if (html[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(html.slice(jsonStart, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
   }
+  return null;
 }
 
-export async function fetchTranscript(
-  videoId: string,
-): Promise<TranscriptLine[]> {
-  const visitorData = await getVisitorData();
+// Condense Set-Cookie headers into a single Cookie string
+function parseCookies(setCookieHeader: string | null): string {
+  if (!setCookieHeader) return "";
+  return setCookieHeader
+    .split(",")
+    .map((c) => c.split(";")[0].trim())
+    .join("; ");
+}
 
-  let tracks: { languageCode: string; baseUrl: string }[] | null = null;
-
-  for (const client of CLIENTS) {
+// ── Strategy 1: InnerTube API (fast, works for most videos) ──────────────────
+async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
+  for (const client of INNERTUBE_CLIENTS) {
     try {
       const res = await fetch(INNERTUBE_URL, {
         method: "POST",
@@ -120,23 +140,64 @@ export async function fetchTranscript(
               clientVersion: client.version,
               hl: "en",
               gl: "US",
-              ...(visitorData ? { visitorData } : {}),
             },
           },
           videoId,
         }),
         cache: "no-store",
       });
-
       if (!res.ok) continue;
       const data = await res.json();
-      const t = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      if (Array.isArray(t) && t.length > 0) {
-        tracks = t;
-        break;
-      }
+      const tracks =
+        data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (Array.isArray(tracks) && tracks.length > 0) return tracks;
     } catch {
       continue;
+    }
+  }
+  return null;
+}
+
+// ── Strategy 2: Watch page HTML scraping (fallback for LOGIN_REQUIRED) ───────
+async function tryWatchPage(
+  videoId: string,
+): Promise<{ tracks: CaptionTrack[]; cookies: string } | null> {
+  try {
+    const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: BROWSER_HEADERS,
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+
+    const cookies = parseCookies(res.headers.get("set-cookie"));
+    const html = await res.text();
+
+    const player = parseInlineJson(html, "ytInitialPlayerResponse");
+    const tracks = (player as any)?.captions?.playerCaptionsTracklistRenderer
+      ?.captionTracks;
+    if (!Array.isArray(tracks) || tracks.length === 0) return null;
+
+    return { tracks, cookies };
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchTranscript(
+  videoId: string,
+): Promise<TranscriptLine[]> {
+  let tracks: CaptionTrack[] | null = null;
+  let cookies = "";
+
+  // Try InnerTube first (no extra request overhead)
+  tracks = await tryInnerTube(videoId);
+
+  // Fall back to HTML scraping if InnerTube returns no tracks (cloud IP restriction)
+  if (!tracks) {
+    const result = await tryWatchPage(videoId);
+    if (result) {
+      tracks = result.tracks;
+      cookies = result.cookies;
     }
   }
 
@@ -146,8 +207,11 @@ export async function fetchTranscript(
     tracks.find((t) => t.languageCode === "en" || t.languageCode === "en-US") ??
     tracks[0];
 
+  const xmlHeaders: Record<string, string> = { ...BROWSER_HEADERS };
+  if (cookies) xmlHeaders["Cookie"] = cookies;
+
   const xmlRes = await fetch(track.baseUrl, {
-    headers: BROWSER_HEADERS,
+    headers: xmlHeaders,
     cache: "no-store",
   });
   if (!xmlRes.ok) throw new Error(`Caption XML returned ${xmlRes.status}`);
