@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
       "Accept-Language": "en-US,en;q=0.9",
+      Cookie: "CONSENT=YES+1; VISITOR_INFO1_LIVE=; GPS=1",
     },
     cache: "no-store",
   });
