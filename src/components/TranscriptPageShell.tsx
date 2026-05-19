@@ -1,35 +1,27 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
-import type { TranscriptLine } from "@/types/transcript";
 import { VideoPanel } from "./VideoPanel";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { LayoutToggle, type LayoutMode } from "./LayoutToggle";
 import { ThemeToggle } from "./ThemeToggle";
+import { useTranscript } from "@/hooks/useTranscript";
 import Link from "next/link";
-
-const DEFAULT_VIDEO_HEIGHT = 270;
-const MIN_VIDEO_HEIGHT = 120;
-const MAX_VIDEO_HEIGHT = 520;
-
-const DEFAULT_VIDEO_WIDTH = 480;
-const MIN_VIDEO_WIDTH = 280;
-const MAX_VIDEO_WIDTH = 900;
 
 interface TranscriptPageShellProps {
   videoId: string;
-  lines: TranscriptLine[];
 }
 
-export function TranscriptPageShell({
-  videoId,
-  lines,
-}: TranscriptPageShellProps) {
+export function TranscriptPageShell({ videoId }: TranscriptPageShellProps) {
   const [layout, setLayout] = useState<LayoutMode>("left");
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
-  const [videoHeightPx, setVideoHeightPx] = useState(DEFAULT_VIDEO_HEIGHT);
-  const [videoWidthPx, setVideoWidthPx] = useState(DEFAULT_VIDEO_WIDTH);
+  const [videoHeightPx, setVideoHeightPx] = useState(270);
+  const [videoWidthPx, setVideoWidthPx] = useState(480);
   const seekFnRef = useRef<((seconds: number) => void) | null>(null);
+
+  // Fetch transcript client-side from the user's browser (residential IP).
+  // YouTube blocks cloud IPs but allows CORS from the browser.
+  const { lines, status } = useTranscript(videoId);
 
   const handleSeekReady = useCallback((fn: (seconds: number) => void) => {
     seekFnRef.current = fn;
@@ -41,64 +33,49 @@ export function TranscriptPageShell({
     setCurrentTimeMs(ms);
   }, []);
 
-  // ── Vertical drag (height) ─────────────────────────────────────────────────
   function startHeightResize(startY: number) {
     let lastY = startY;
-
     const onMouseMove = (e: MouseEvent) => move(e.clientY);
     const onTouchMove = (e: TouchEvent) => {
       e.preventDefault();
       move(e.touches[0].clientY);
     };
-
-    function move(clientY: number) {
-      const dy = clientY - lastY;
-      lastY = clientY;
-      setVideoHeightPx((h) =>
-        Math.min(MAX_VIDEO_HEIGHT, Math.max(MIN_VIDEO_HEIGHT, h + dy)),
-      );
+    function move(y: number) {
+      const dy = y - lastY;
+      lastY = y;
+      setVideoHeightPx((h) => Math.min(520, Math.max(120, h + dy)));
     }
-
     function cleanup() {
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", cleanup);
       document.removeEventListener("touchmove", onTouchMove);
       document.removeEventListener("touchend", cleanup);
     }
-
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", cleanup);
     document.addEventListener("touchmove", onTouchMove, { passive: false });
     document.addEventListener("touchend", cleanup);
   }
 
-  // ── Horizontal drag (width) ────────────────────────────────────────────────
-  // side: 'left' handle → dragging left makes it wider, 'right' → dragging right makes it wider
   function startWidthResize(startX: number, side: "left" | "right") {
     let lastX = startX;
-
     const onMouseMove = (e: MouseEvent) => move(e.clientX);
     const onTouchMove = (e: TouchEvent) => {
       e.preventDefault();
       move(e.touches[0].clientX);
     };
-
-    function move(clientX: number) {
-      const dx = clientX - lastX;
-      lastX = clientX;
+    function move(x: number) {
+      const dx = x - lastX;
+      lastX = x;
       const delta = side === "right" ? dx : -dx;
-      setVideoWidthPx((w) =>
-        Math.min(MAX_VIDEO_WIDTH, Math.max(MIN_VIDEO_WIDTH, w + delta)),
-      );
+      setVideoWidthPx((w) => Math.min(900, Math.max(280, w + delta)));
     }
-
     function cleanup() {
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", cleanup);
       document.removeEventListener("touchmove", onTouchMove);
       document.removeEventListener("touchend", cleanup);
     }
-
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", cleanup);
     document.addEventListener("touchmove", onTouchMove, { passive: false });
@@ -109,7 +86,6 @@ export function TranscriptPageShell({
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-white dark:bg-zinc-950">
-      {/* Top bar */}
       <header className="shrink-0 flex items-center justify-between px-4 py-2 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800">
         <Link
           href="/"
@@ -139,19 +115,13 @@ export function TranscriptPageShell({
         </div>
       </header>
 
-      {/* ── Vertical layout ── */}
       {isVertical && (
         <main className="flex-1 overflow-hidden bg-zinc-100 dark:bg-zinc-900 flex justify-center">
-          {/*
-            Single column — width controlled by the left/right handles.
-            justify-center centres it horizontally; default align-items:stretch
-            makes it fill the full height of main without needing explicit h-full tricks.
-          */}
           <div
             className="relative flex flex-col h-full overflow-hidden shadow-xl"
             style={{ width: videoWidthPx, maxWidth: "100%" }}
           >
-            {/* ── Left width handle (desktop only) ── */}
+            {/* Left width handle */}
             <div
               className="hidden lg:flex absolute top-0 bottom-0 -left-3 w-3 z-20 items-center justify-center cursor-ew-resize group select-none"
               onMouseDown={(e) => {
@@ -164,8 +134,7 @@ export function TranscriptPageShell({
             >
               <div className="w-0.5 h-12 rounded-full bg-zinc-300 dark:bg-zinc-600 group-hover:bg-zinc-500 dark:group-hover:bg-zinc-400 transition-colors" />
             </div>
-
-            {/* ── Right width handle (desktop only) ── */}
+            {/* Right width handle */}
             <div
               className="hidden lg:flex absolute top-0 bottom-0 -right-3 w-3 z-20 items-center justify-center cursor-ew-resize group select-none"
               onMouseDown={(e) => {
@@ -179,7 +148,6 @@ export function TranscriptPageShell({
               <div className="w-0.5 h-12 rounded-full bg-zinc-300 dark:bg-zinc-600 group-hover:bg-zinc-500 dark:group-hover:bg-zinc-400 transition-colors" />
             </div>
 
-            {/* ── Video section ── */}
             <div
               className="w-full bg-zinc-950 shrink-0"
               style={{ height: videoHeightPx }}
@@ -191,7 +159,6 @@ export function TranscriptPageShell({
               />
             </div>
 
-            {/* ── Height drag handle ── */}
             <div
               onMouseDown={(e) => {
                 e.preventDefault();
@@ -203,10 +170,10 @@ export function TranscriptPageShell({
               <div className="w-10 h-0.5 rounded-full bg-zinc-400 dark:bg-zinc-600 group-hover:bg-zinc-500 dark:group-hover:bg-zinc-400 transition-colors" />
             </div>
 
-            {/* ── Transcript section ── */}
             <div className="w-full flex-1 min-h-0 overflow-hidden bg-white dark:bg-zinc-900">
               <TranscriptPanel
                 lines={lines}
+                status={status}
                 currentTimeMs={currentTimeMs}
                 onSeek={handleSeek}
                 videoId={videoId}
@@ -216,7 +183,6 @@ export function TranscriptPageShell({
         </main>
       )}
 
-      {/* ── Horizontal layouts (left / right) ── */}
       {!isVertical && (
         <main
           className={`flex-1 overflow-hidden flex flex-col ${layout === "right" ? "lg:flex-row-reverse" : "lg:flex-row"}`}
@@ -238,6 +204,7 @@ export function TranscriptPageShell({
           <div className="w-full lg:w-1/2 flex-1 overflow-hidden border-t lg:border-t-0 lg:border-l border-zinc-100 dark:border-zinc-800">
             <TranscriptPanel
               lines={lines}
+              status={status}
               currentTimeMs={currentTimeMs}
               onSeek={handleSeek}
               videoId={videoId}

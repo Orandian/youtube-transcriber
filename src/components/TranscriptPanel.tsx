@@ -5,8 +5,11 @@ import type { TranscriptLine } from "@/types/transcript";
 import { TranscriptLineItem } from "./TranscriptLineItem";
 import { buildTxt, buildSrt, buildJson, triggerDownload } from "@/lib/download";
 
+import type { TranscriptStatus } from "@/hooks/useTranscript";
+
 interface TranscriptPanelProps {
   lines: TranscriptLine[];
+  status: TranscriptStatus;
   currentTimeMs: number;
   onSeek: (seconds: number) => void;
   videoId: string;
@@ -125,6 +128,7 @@ function DownloadMenu({
 
 export function TranscriptPanel({
   lines,
+  status,
   currentTimeMs,
   onSeek,
   videoId,
@@ -167,7 +171,36 @@ export function TranscriptPanel({
     }
   }, [activeIndex]);
 
-  if (lines.length === 0) {
+  if (status === "loading") {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 px-8 text-center">
+        <svg
+          className="w-6 h-6 animate-spin text-zinc-400 dark:text-zinc-600"
+          fill="none"
+          viewBox="0 0 24 24"
+        >
+          <circle
+            className="opacity-25"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            strokeWidth="4"
+          />
+          <path
+            className="opacity-75"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8v8z"
+          />
+        </svg>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          Loading transcript…
+        </p>
+      </div>
+    );
+  }
+
+  if (status === "empty" || (status === "ready" && lines.length === 0)) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 px-8 text-center">
         <svg
@@ -188,6 +221,32 @@ export function TranscriptPanel({
         </p>
         <p className="text-xs text-zinc-400 dark:text-zinc-600">
           Try a video with auto-generated or manual captions enabled.
+        </p>
+      </div>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 px-8 text-center">
+        <svg
+          className="w-10 h-10 text-zinc-300 dark:text-zinc-700"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+        <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
+          Could not load transcript
+        </p>
+        <p className="text-xs text-zinc-400 dark:text-zinc-600">
+          This video may be private or have captions disabled.
         </p>
       </div>
     );
