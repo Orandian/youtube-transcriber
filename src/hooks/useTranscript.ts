@@ -190,7 +190,20 @@ async function fetchViaInnerTube(
   const webKey = process.env.NEXT_PUBLIC_YT_WEB_KEY;
 
   const clients = [
-    // CF Worker — Cloudflare edge IP, adds Access-Control-Allow-Origin: *
+    // Our own /api/innertube Edge proxy — same-origin (no CORS), runs on Cloudflare IPs
+    {
+      url: "/api/innertube",
+      ctx: {
+        clientName: "ANDROID",
+        clientVersion: "20.10.38",
+        androidSdkVersion: 30,
+        userAgent:
+          "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
+        hl: "en",
+        gl: "US",
+      },
+    },
+    // CF Worker fallback
     ...(cfWorkerUrl
       ? [
           {
