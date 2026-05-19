@@ -260,7 +260,13 @@ export async function fetchTranscript(
     }
   }
 
-  if (!tracks) throw new Error("No captions available for this video");
+  if (!tracks)
+    throw new Error(
+      "No captions available for this video [keys:" +
+        (YT_ANDROID_KEY ? "android" : "") +
+        (YT_WEB_KEY ? "+web" : "") +
+        "]",
+    );
 
   const track =
     tracks.find((t) => t.languageCode === "en" || t.languageCode === "en-US") ??

@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
       message.includes("restricted")
     ) {
       return Response.json(
-        { error: "No captions available for this video." },
+        { error: "No captions available for this video.", detail: message },
         { status: 404 },
       );
     }
