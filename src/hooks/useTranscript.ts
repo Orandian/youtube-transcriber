@@ -5,6 +5,18 @@ import type { TranscriptLine } from "@/types/transcript";
 
 const INNERTUBE_URL =
   "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
+const WEB_CLIENT = {
+  clientName: "WEB",
+  clientVersion: "2.20231219.04.00",
+  hl: "en",
+  gl: "US",
+};
+const ANDROID_CLIENT = {
+  clientName: "ANDROID",
+  clientVersion: "20.10.38",
+  hl: "en",
+  gl: "US",
+};
 const SPEAKER_REGEX = /^\[([^\]]+)\]:\s*|^([A-Z][a-zA-Z\s]+):\s+/;
 
 function detectSpeaker(text: string): { speaker?: string; cleanText: string } {
@@ -85,29 +97,31 @@ export function useTranscript(videoId: string) {
       setLines([]);
 
       try {
-        // 1. Get caption tracks via InnerTube — called from user's browser (residential IP)
-        //    YouTube allows CORS and returns captions that it would block from cloud servers
-        const res = await fetch(INNERTUBE_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            context: {
-              client: {
-                clientName: "ANDROID",
-                clientVersion: "20.10.38",
-                hl: "en",
-                gl: "US",
-              },
-            },
-            videoId,
-          }),
-        });
+        // Fetch from browser (residential IP) — YouTube blocks cloud IPs but
+        // allows CORS from our domain. Try WEB client first (native to browser),
+        // then ANDROID as fallback.
+        async function innerTube(client: typeof WEB_CLIENT) {
+          const r = await fetch(INNERTUBE_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              context: { client },
+              videoId,
+            }),
+          });
+          if (!r.ok) throw new Error(`InnerTube ${r.status}`);
+          return r.json();
+        }
 
-        if (!res.ok) throw new Error(`InnerTube ${res.status}`);
-        const player = await res.json();
-
-        const tracks: { languageCode: string; baseUrl: string }[] =
+        let player = await innerTube(WEB_CLIENT);
+        let tracks: { languageCode: string; baseUrl: string }[] =
           player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+
+        if (!Array.isArray(tracks) || tracks.length === 0) {
+          player = await innerTube(ANDROID_CLIENT);
+          tracks =
+            player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        }
 
         if (!Array.isArray(tracks) || tracks.length === 0) {
           if (!cancelled) setStatus("empty");
