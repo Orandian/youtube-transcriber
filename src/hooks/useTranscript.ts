@@ -3,20 +3,8 @@
 import { useState, useEffect } from "react";
 import type { TranscriptLine } from "@/types/transcript";
 
-const INNERTUBE_URL =
-  "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
-const WEB_CLIENT = {
-  clientName: "WEB",
-  clientVersion: "2.20231219.04.00",
-  hl: "en",
-  gl: "US",
-};
-const ANDROID_CLIENT = {
-  clientName: "ANDROID",
-  clientVersion: "20.10.38",
-  hl: "en",
-  gl: "US",
-};
+export type TranscriptStatus = "loading" | "ready" | "empty" | "error";
+
 const SPEAKER_REGEX = /^\[([^\]]+)\]:\s*|^([A-Z][a-zA-Z\s]+):\s+/;
 
 function detectSpeaker(text: string): { speaker?: string; cleanText: string } {
@@ -42,13 +30,41 @@ function decodeEntities(str: string): string {
     .trim();
 }
 
+// YouTube json3 format: { events: [{ tStartMs, dDurationMs, segs: [{ utf8 }] }] }
+function parseJson3(
+  data: unknown,
+): { text: string; offsetMs: number; durationMs: number }[] {
+  const results: { text: string; offsetMs: number; durationMs: number }[] = [];
+  const events = (data as { events?: unknown[] })?.events;
+  if (!Array.isArray(events)) return results;
+  for (const ev of events) {
+    const e = ev as {
+      tStartMs?: number;
+      dDurationMs?: number;
+      segs?: { utf8?: string }[];
+    };
+    if (e.tStartMs == null || !Array.isArray(e.segs)) continue;
+    const text = e.segs
+      .map((s) => s.utf8 ?? "")
+      .join("")
+      .replace(/\n/g, " ")
+      .trim();
+    if (!text) continue;
+    results.push({
+      text,
+      offsetMs: e.tStartMs,
+      durationMs: e.dDurationMs ?? 2000,
+    });
+  }
+  return results;
+}
+
 function parseCaptionXml(
   xml: string,
 ): { text: string; offsetMs: number; durationMs: number }[] {
   const results: { text: string; offsetMs: number; durationMs: number }[] = [];
   let m;
 
-  // srv3: <p t="ms" d="ms" ...>
   const pRe = /<p\s+t="(\d+)"\s+d="(\d+)"[^>]*>([\s\S]*?)<\/p>/g;
   while ((m = pRe.exec(xml)) !== null) {
     const inner = m[3];
@@ -66,7 +82,6 @@ function parseCaptionXml(
       });
   }
 
-  // Classic: <text start="s" dur="s">
   if (results.length === 0) {
     const tRe = /<text start="([^"]+)" dur="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
     while ((m = tRe.exec(xml)) !== null) {
@@ -83,7 +98,107 @@ function parseCaptionXml(
   return results;
 }
 
-export type TranscriptStatus = "loading" | "ready" | "empty" | "error";
+function toLines(
+  entries: { text: string; offsetMs: number; durationMs: number }[],
+): TranscriptLine[] {
+  return entries.map(({ text, offsetMs, durationMs }) => {
+    const { speaker, cleanText } = detectSpeaker(text);
+    return {
+      text: cleanText,
+      offset: offsetMs,
+      duration: durationMs,
+      ...(speaker ? { speaker } : {}),
+    };
+  });
+}
+
+// Strategy A: timedtext GET (no signature, CORS-enabled, works for most public videos)
+async function fetchTimedText(
+  videoId: string,
+): Promise<{ text: string; offsetMs: number; durationMs: number }[] | null> {
+  const candidates = [
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json3`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&kind=asr&fmt=json3`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&fmt=json3`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&kind=asr&fmt=json3`,
+  ];
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) continue;
+      const data = await r.json();
+      const entries = parseJson3(data);
+      if (entries.length > 0) {
+        console.log(`[useTranscript] timedtext OK (${url})`);
+        return entries;
+      }
+    } catch (e) {
+      console.warn("[useTranscript] timedtext attempt failed:", url, e);
+    }
+  }
+  return null;
+}
+
+// Strategy B: InnerTube POST → get signed caption URL → fetch XML
+async function fetchViaInnerTube(
+  videoId: string,
+): Promise<{ text: string; offsetMs: number; durationMs: number }[] | null> {
+  const INNERTUBE_URL =
+    "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
+  const clients = [
+    {
+      clientName: "WEB",
+      clientVersion: "2.20231219.04.00",
+      hl: "en",
+      gl: "US",
+    },
+    { clientName: "ANDROID", clientVersion: "20.10.38", hl: "en", gl: "US" },
+  ];
+
+  for (const client of clients) {
+    try {
+      const r = await fetch(INNERTUBE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ context: { client }, videoId }),
+      });
+      if (!r.ok) {
+        console.warn(
+          `[useTranscript] InnerTube ${client.clientName} HTTP ${r.status}`,
+        );
+        continue;
+      }
+      const player = await r.json();
+      const tracks: { languageCode: string; baseUrl: string }[] =
+        player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (!Array.isArray(tracks) || tracks.length === 0) {
+        console.warn(
+          `[useTranscript] InnerTube ${client.clientName}: no tracks. playability:`,
+          player?.playabilityStatus?.status,
+        );
+        continue;
+      }
+      const track =
+        tracks.find(
+          (t) => t.languageCode === "en" || t.languageCode === "en-US",
+        ) ?? tracks[0];
+      const xmlRes = await fetch(track.baseUrl);
+      if (!xmlRes.ok) {
+        console.warn(`[useTranscript] caption XML ${xmlRes.status}`);
+        continue;
+      }
+      const xml = await xmlRes.text();
+      const entries = parseCaptionXml(xml);
+      if (entries.length > 0) {
+        console.log(`[useTranscript] InnerTube ${client.clientName} OK`);
+        return entries;
+      }
+    } catch (e) {
+      console.warn(`[useTranscript] InnerTube ${client.clientName} error:`, e);
+    }
+  }
+  return null;
+}
 
 export function useTranscript(videoId: string) {
   const [lines, setLines] = useState<TranscriptLine[]>([]);
@@ -97,70 +212,26 @@ export function useTranscript(videoId: string) {
       setLines([]);
 
       try {
-        // Fetch from browser (residential IP) — YouTube blocks cloud IPs but
-        // allows CORS from our domain. Try WEB client first (native to browser),
-        // then ANDROID as fallback.
-        async function innerTube(client: typeof WEB_CLIENT) {
-          const r = await fetch(INNERTUBE_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              context: { client },
-              videoId,
-            }),
-          });
-          if (!r.ok) throw new Error(`InnerTube ${r.status}`);
-          return r.json();
-        }
-
-        let player = await innerTube(WEB_CLIENT);
-        let tracks: { languageCode: string; baseUrl: string }[] =
-          player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-
-        if (!Array.isArray(tracks) || tracks.length === 0) {
-          player = await innerTube(ANDROID_CLIENT);
-          tracks =
-            player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-        }
-
-        if (!Array.isArray(tracks) || tracks.length === 0) {
-          if (!cancelled) setStatus("empty");
+        // Try timedtext first (simple GET, known CORS, no signed URL needed)
+        const timedTextEntries = await fetchTimedText(videoId);
+        if (!cancelled && timedTextEntries && timedTextEntries.length > 0) {
+          setLines(toLines(timedTextEntries));
+          setStatus("ready");
           return;
         }
 
-        const track =
-          tracks.find(
-            (t) => t.languageCode === "en" || t.languageCode === "en-US",
-          ) ?? tracks[0];
-
-        // 2. Fetch caption XML
-        const xmlRes = await fetch(track.baseUrl);
-        if (!xmlRes.ok) throw new Error(`Caption XML ${xmlRes.status}`);
-        const xml = await xmlRes.text();
-
-        const entries = parseCaptionXml(xml);
+        // Fall back to InnerTube signed URL approach
+        const innerTubeEntries = await fetchViaInnerTube(videoId);
         if (cancelled) return;
-
-        if (entries.length === 0) {
-          setStatus("empty");
+        if (innerTubeEntries && innerTubeEntries.length > 0) {
+          setLines(toLines(innerTubeEntries));
+          setStatus("ready");
           return;
         }
 
-        const result: TranscriptLine[] = entries.map(
-          ({ text, offsetMs, durationMs }) => {
-            const { speaker, cleanText } = detectSpeaker(text);
-            return {
-              text: cleanText,
-              offset: offsetMs,
-              duration: durationMs,
-              ...(speaker ? { speaker } : {}),
-            };
-          },
-        );
-
-        setLines(result);
-        setStatus("ready");
-      } catch {
+        setStatus("empty");
+      } catch (e) {
+        console.error("[useTranscript] fatal:", e);
         if (!cancelled) setStatus("error");
       }
     }
