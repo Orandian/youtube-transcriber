@@ -164,21 +164,21 @@ async function fetchViaInnerTube(
   videoId: string,
 ): Promise<{ text: string; offsetMs: number; durationMs: number }[] | null> {
   const clients = [
-    // googleapis.com is the Google API domain — has CORS headers + different IP policy
+    // googleapis.com + API key — proper CORS, no cloud-IP block
     {
-      url: "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false",
+      url: "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w&prettyPrint=false",
       ctx: {
-        clientName: "WEB",
-        clientVersion: "2.20231219.04.00",
+        clientName: "ANDROID",
+        clientVersion: "20.10.38",
         hl: "en",
         gl: "US",
       },
     },
     {
-      url: "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false",
+      url: "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false",
       ctx: {
-        clientName: "ANDROID",
-        clientVersion: "20.10.38",
+        clientName: "WEB",
+        clientVersion: "2.20231219.04.00",
         hl: "en",
         gl: "US",
       },

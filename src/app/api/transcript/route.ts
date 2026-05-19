@@ -22,24 +22,22 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
 
+    // Treat any "no captions" variant as 404 so the browser falls back gracefully
     if (
+      message.includes("No captions") ||
       message.includes("Could not get transcripts") ||
-      message.includes("disabled")
+      message.includes("disabled") ||
+      message.includes("private") ||
+      message.includes("restricted")
     ) {
       return Response.json(
         { error: "No captions available for this video." },
         { status: 404 },
       );
     }
-    if (message.includes("private") || message.includes("restricted")) {
-      return Response.json(
-        { error: "This video is private or restricted." },
-        { status: 403 },
-      );
-    }
 
     return Response.json(
-      { error: "Failed to fetch transcript.", detail: message },
+      { error: "Failed to fetch transcript." },
       { status: 500 },
     );
   }
