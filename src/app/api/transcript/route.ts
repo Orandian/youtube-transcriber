@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { fetchTranscript } from "@/lib/transcript";
 
+export const runtime = "edge";
+
 const querySchema = z.object({
   videoId: z.string().regex(/^[a-zA-Z0-9_-]{11}$/, "Invalid video ID"),
 });
