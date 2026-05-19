@@ -196,6 +196,7 @@ async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
           },
           videoId,
         }),
+        signal: AbortSignal.timeout(2500),
         cache: "no-store",
       });
       const host = new URL(client.url).hostname;
@@ -237,7 +238,11 @@ async function tryTimedTextList(
   try {
     const r = await fetch(
       `https://www.youtube.com/api/timedtext?v=${videoId}&type=list`,
-      { headers: BROWSER_HEADERS, cache: "no-store" },
+      {
+        headers: BROWSER_HEADERS,
+        signal: AbortSignal.timeout(4000),
+        cache: "no-store",
+      },
     );
     if (!r.ok) return null;
     const xml = await r.text();
@@ -295,10 +300,13 @@ export async function fetchTranscript(
   let tracks: CaptionTrack[] | null = null;
   let cookies = "";
 
-  tracks = await tryInnerTube(videoId);
-
-  // Discover available languages via timedtext list — works regardless of IP
-  if (!tracks) tracks = await tryTimedTextList(videoId);
+  // Run concurrently: InnerTube has 2.5s timeouts, timedtext list is fast.
+  // timedtext often wins the race and doesn't have cloud-IP restrictions.
+  const [it, tt] = await Promise.all([
+    tryInnerTube(videoId).catch(() => null),
+    tryTimedTextList(videoId).catch(() => null),
+  ]);
+  tracks = it ?? tt;
 
   if (!tracks) {
     const result = await tryWatchPage(videoId);
