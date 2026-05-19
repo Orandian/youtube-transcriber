@@ -3,8 +3,6 @@ import type { TranscriptLine } from "@/types/transcript";
 const INNERTUBE_URL =
   "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 
-// Multiple clients tried in order — different IPs/regions respond differently.
-// Android works for most, IOS and MWEB as fallbacks.
 const CLIENTS = [
   {
     name: "ANDROID",
@@ -22,6 +20,12 @@ const CLIENTS = [
     version: "2.20240726.00.00",
     userAgent:
       "Mozilla/5.0 (iPad; CPU OS 16_7_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+  },
+  {
+    name: "WEB",
+    version: "2.20231010.04.01",
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   },
 ];
 
@@ -60,7 +64,6 @@ function parseCaptionXml(xml: string): RawEntry[] {
   const results: RawEntry[] = [];
   let m;
 
-  // srv3: <p t="ms" d="ms" ...><s>word</s></p>
   const pRe = /<p\s+t="(\d+)"\s+d="(\d+)"[^>]*>([\s\S]*?)<\/p>/g;
   while ((m = pRe.exec(xml)) !== null) {
     const inner = m[3];
@@ -78,7 +81,6 @@ function parseCaptionXml(xml: string): RawEntry[] {
       });
   }
 
-  // Classic fallback: <text start="s" dur="s">text</text>
   if (results.length === 0) {
     const tRe = /<text start="([^"]+)" dur="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
     while ((m = tRe.exec(xml)) !== null) {
@@ -108,12 +110,7 @@ async function fetchViaClient(
       },
       body: JSON.stringify({
         context: {
-          client: {
-            clientName: client.name,
-            clientVersion: client.version,
-            hl: "en",
-            gl: "US",
-          },
+          client: { clientName: client.name, clientVersion: client.version },
         },
         videoId,
       }),
@@ -122,10 +119,20 @@ async function fetchViaClient(
 
     if (!res.ok) return null;
     const data = await res.json();
+    // Log the playability + caption status per client for debugging
+    const status = data?.playabilityStatus?.status;
+    const trackCount =
+      data?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length ??
+      0;
+    console.log(
+      `[transcript] ${client.name}: playability=${status} tracks=${trackCount}`,
+    );
+
     const tracks =
       data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
     return Array.isArray(tracks) && tracks.length > 0 ? tracks : null;
-  } catch {
+  } catch (e) {
+    console.log(`[transcript] ${client.name} error:`, e);
     return null;
   }
 }
@@ -133,7 +140,6 @@ async function fetchViaClient(
 export async function fetchTranscript(
   videoId: string,
 ): Promise<TranscriptLine[]> {
-  // Try each client in turn until one returns caption tracks
   let tracks: { languageCode: string; baseUrl: string }[] | null = null;
   for (const client of CLIENTS) {
     tracks = await fetchViaClient(videoId, client);
@@ -142,7 +148,6 @@ export async function fetchTranscript(
 
   if (!tracks) throw new Error("No captions available for this video");
 
-  // Prefer English, fall back to first available
   const track =
     tracks.find((t) => t.languageCode === "en" || t.languageCode === "en-US") ??
     tracks[0];
