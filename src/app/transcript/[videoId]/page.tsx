@@ -1,3 +1,5 @@
+export const runtime = "edge";
+
 import { notFound } from "next/navigation";
 import { fetchTranscript } from "@/lib/transcript";
 import { TranscriptPageShell } from "@/components/TranscriptPageShell";
