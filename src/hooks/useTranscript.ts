@@ -181,15 +181,33 @@ async function fetchTimedText(
   return null;
 }
 
-// ── Strategy 3: InnerTube from browser (googleapis.com has CORS) ──────────────
+// ── Strategy 3: InnerTube from browser (via CF Worker or googleapis.com) ─────
 async function fetchViaInnerTube(
   videoId: string,
 ): Promise<{ text: string; offsetMs: number; durationMs: number }[] | null> {
+  const cfWorkerUrl = process.env.NEXT_PUBLIC_CF_WORKER_URL;
   const androidKey = process.env.NEXT_PUBLIC_YT_ANDROID_KEY;
   const webKey = process.env.NEXT_PUBLIC_YT_WEB_KEY;
 
   const clients = [
-    // googleapis.com + API key (from env) — proper CORS, no cloud-IP block
+    // CF Worker — Cloudflare edge IP, adds Access-Control-Allow-Origin: *
+    ...(cfWorkerUrl
+      ? [
+          {
+            url: cfWorkerUrl,
+            ctx: {
+              clientName: "ANDROID",
+              clientVersion: "20.10.38",
+              androidSdkVersion: 30,
+              userAgent:
+                "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
+              hl: "en",
+              gl: "US",
+            },
+          },
+        ]
+      : []),
+    // googleapis.com + API key — CORS blocked in practice; kept as last-resort
     ...(androidKey
       ? [
           {
