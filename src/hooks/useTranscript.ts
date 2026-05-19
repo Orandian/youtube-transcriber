@@ -163,26 +163,37 @@ async function fetchTimedText(
 async function fetchViaInnerTube(
   videoId: string,
 ): Promise<{ text: string; offsetMs: number; durationMs: number }[] | null> {
+  const androidKey = process.env.NEXT_PUBLIC_YT_ANDROID_KEY;
+  const webKey = process.env.NEXT_PUBLIC_YT_WEB_KEY;
+
   const clients = [
-    // googleapis.com + API key — proper CORS, no cloud-IP block
-    {
-      url: "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w&prettyPrint=false",
-      ctx: {
-        clientName: "ANDROID",
-        clientVersion: "20.10.38",
-        hl: "en",
-        gl: "US",
-      },
-    },
-    {
-      url: "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false",
-      ctx: {
-        clientName: "WEB",
-        clientVersion: "2.20231219.04.00",
-        hl: "en",
-        gl: "US",
-      },
-    },
+    // googleapis.com + API key (from env) — proper CORS, no cloud-IP block
+    ...(androidKey
+      ? [
+          {
+            url: `https://youtubei.googleapis.com/youtubei/v1/player?key=${androidKey}&prettyPrint=false`,
+            ctx: {
+              clientName: "ANDROID",
+              clientVersion: "20.10.38",
+              hl: "en",
+              gl: "US",
+            },
+          },
+        ]
+      : []),
+    ...(webKey
+      ? [
+          {
+            url: `https://youtubei.googleapis.com/youtubei/v1/player?key=${webKey}&prettyPrint=false`,
+            ctx: {
+              clientName: "WEB",
+              clientVersion: "2.20231219.04.00",
+              hl: "en",
+              gl: "US",
+            },
+          },
+        ]
+      : []),
     // www.youtube.com as final fallback
     {
       url: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",

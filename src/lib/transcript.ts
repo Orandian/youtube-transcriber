@@ -7,32 +7,43 @@ const BROWSER_HEADERS = {
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 };
 
-// API keys are embedded in YouTube's own client apps (public, not secret).
-// Required for youtubei.googleapis.com — without them the server returns 403.
+// Keys come from env vars (set in .env.local and Vercel dashboard).
+// googleapis.com entries are skipped when keys are absent.
+const YT_ANDROID_KEY = process.env.NEXT_PUBLIC_YT_ANDROID_KEY ?? "";
+const YT_WEB_KEY = process.env.NEXT_PUBLIC_YT_WEB_KEY ?? "";
+
 const INNERTUBE_CLIENTS: {
   url: string;
   name: string;
   version: string;
   extraHeaders: Record<string, string>;
 }[] = [
-  {
-    url: "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w&prettyPrint=false",
-    name: "ANDROID",
-    version: "20.10.38",
-    extraHeaders: {
-      "X-YouTube-Client-Name": "3",
-      "X-YouTube-Client-Version": "20.10.38",
-    },
-  },
-  {
-    url: "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false",
-    name: "WEB",
-    version: "2.20231219.04.00",
-    extraHeaders: {
-      "X-YouTube-Client-Name": "1",
-      "X-YouTube-Client-Version": "2.20231219.04.00",
-    },
-  },
+  ...(YT_ANDROID_KEY
+    ? [
+        {
+          url: `https://youtubei.googleapis.com/youtubei/v1/player?key=${YT_ANDROID_KEY}&prettyPrint=false`,
+          name: "ANDROID",
+          version: "20.10.38",
+          extraHeaders: {
+            "X-YouTube-Client-Name": "3",
+            "X-YouTube-Client-Version": "20.10.38",
+          },
+        },
+      ]
+    : []),
+  ...(YT_WEB_KEY
+    ? [
+        {
+          url: `https://youtubei.googleapis.com/youtubei/v1/player?key=${YT_WEB_KEY}&prettyPrint=false`,
+          name: "WEB",
+          version: "2.20231219.04.00",
+          extraHeaders: {
+            "X-YouTube-Client-Name": "1",
+            "X-YouTube-Client-Version": "2.20231219.04.00",
+          },
+        },
+      ]
+    : []),
   {
     url: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
     name: "ANDROID",
@@ -119,7 +130,6 @@ function parseCaptionXml(xml: string): RawEntry[] {
   return results;
 }
 
-// Properly extract a top-level JSON object assigned to `var NAME = {...}` in HTML
 function parseInlineJson(
   html: string,
   varName: string,
@@ -145,7 +155,6 @@ function parseInlineJson(
   return null;
 }
 
-// Condense Set-Cookie headers into a single Cookie string
 function parseCookies(setCookieHeader: string | null): string {
   if (!setCookieHeader) return "";
   return setCookieHeader
@@ -154,7 +163,6 @@ function parseCookies(setCookieHeader: string | null): string {
     .join("; ");
 }
 
-// ── Strategy 1: InnerTube API ─────────────────────────────────────────────────
 async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
   for (const client of INNERTUBE_CLIENTS) {
     try {
@@ -190,7 +198,6 @@ async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
   return null;
 }
 
-// ── Strategy 2: Watch page HTML scraping (fallback for LOGIN_REQUIRED) ───────
 async function tryWatchPage(
   videoId: string,
 ): Promise<{ tracks: CaptionTrack[]; cookies: string } | null> {
@@ -205,6 +212,7 @@ async function tryWatchPage(
     const html = await res.text();
 
     const player = parseInlineJson(html, "ytInitialPlayerResponse");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tracks = (player as any)?.captions?.playerCaptionsTracklistRenderer
       ?.captionTracks;
     if (!Array.isArray(tracks) || tracks.length === 0) return null;
@@ -221,10 +229,8 @@ export async function fetchTranscript(
   let tracks: CaptionTrack[] | null = null;
   let cookies = "";
 
-  // Try InnerTube first (no extra request overhead)
   tracks = await tryInnerTube(videoId);
 
-  // Fall back to HTML scraping if InnerTube returns no tracks (cloud IP restriction)
   if (!tracks) {
     const result = await tryWatchPage(videoId);
     if (result) {
