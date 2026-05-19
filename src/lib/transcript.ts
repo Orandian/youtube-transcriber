@@ -7,35 +7,9 @@ const BROWSER_HEADERS = {
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 };
 
-// Keys / worker URL come from env vars (set in .env.local and Vercel dashboard).
-// CF_WORKER_URL (server-only) takes precedence; NEXT_PUBLIC_ variant is the
-// legacy name and still works for backwards compat.
-const CF_WORKER_URL =
-  process.env.CF_WORKER_URL ?? process.env.NEXT_PUBLIC_CF_WORKER_URL ?? "";
+// Keys come from env vars (set in .env.local and Vercel dashboard).
 const YT_ANDROID_KEY = process.env.NEXT_PUBLIC_YT_ANDROID_KEY ?? "";
 const YT_WEB_KEY = process.env.NEXT_PUBLIC_YT_WEB_KEY ?? "";
-
-/**
- * Fetch a YouTube URL, routing through the Cloudflare worker when available
- * so that Vercel's cloud IPs are never exposed to YouTube directly.
- * Without the worker, falls back to a direct fetch (works locally).
- */
-async function proxyYouTubeFetch(
-  url: string,
-  timeoutMs = 8000,
-): Promise<Response> {
-  if (CF_WORKER_URL) {
-    return fetch(`${CF_WORKER_URL}?url=${encodeURIComponent(url)}`, {
-      signal: AbortSignal.timeout(timeoutMs),
-      cache: "no-store",
-    });
-  }
-  return fetch(url, {
-    headers: BROWSER_HEADERS,
-    signal: AbortSignal.timeout(timeoutMs),
-    cache: "no-store",
-  });
-}
 
 const INNERTUBE_CLIENTS: {
   url: string;
@@ -45,23 +19,6 @@ const INNERTUBE_CLIENTS: {
   userAgent?: string;
   extraHeaders: Record<string, string>;
 }[] = [
-  // CF Worker (Cloudflare edge IP, adds CORS headers) — preferred when set
-  ...(CF_WORKER_URL
-    ? [
-        {
-          url: CF_WORKER_URL,
-          name: "ANDROID",
-          version: "20.10.38",
-          androidSdkVersion: 30,
-          userAgent:
-            "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip",
-          extraHeaders: {
-            "X-YouTube-Client-Name": "3",
-            "X-YouTube-Client-Version": "20.10.38",
-          },
-        },
-      ]
-    : []),
   ...(YT_ANDROID_KEY
     ? [
         {
@@ -201,7 +158,7 @@ function parseCookies(setCookieHeader: string | null): string {
 
 async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
   console.log(
-    `[transcript] clients to try: ${INNERTUBE_CLIENTS.length} (cf_worker=${!!CF_WORKER_URL}, android_key=${!!YT_ANDROID_KEY}, web_key=${!!YT_WEB_KEY})`,
+    `[transcript] clients to try: ${INNERTUBE_CLIENTS.length} (android_key=${!!YT_ANDROID_KEY}, web_key=${!!YT_WEB_KEY})`,
   );
   for (const client of INNERTUBE_CLIENTS) {
     try {
@@ -268,9 +225,13 @@ async function tryTimedTextList(videoId: string): Promise<{
   debug: string;
 }> {
   try {
-    const r = await proxyYouTubeFetch(
+    const r = await fetch(
       `https://www.youtube.com/api/timedtext?v=${videoId}&type=list`,
-      4000,
+      {
+        headers: BROWSER_HEADERS,
+        signal: AbortSignal.timeout(4000),
+        cache: "no-store",
+      },
     );
     if (!r.ok) return { tracks: null, debug: `list_http=${r.status}` };
 
@@ -499,20 +460,12 @@ export async function fetchTranscript(
     tracks.find((t) => t.languageCode === "en" || t.languageCode === "en-US") ??
     tracks[0];
 
-  // Route through the CF worker so Vercel's cloud IP never hits YouTube directly.
-  // If cookies were captured from the watch-page fallback, append them to the
-  // URL only when NOT using the proxy (the proxy adds its own headers).
-  let xmlRes: Response;
-  if (CF_WORKER_URL) {
-    xmlRes = await proxyYouTubeFetch(track.baseUrl);
-  } else {
-    const xmlHeaders: Record<string, string> = { ...BROWSER_HEADERS };
-    if (cookies) xmlHeaders["Cookie"] = cookies;
-    xmlRes = await fetch(track.baseUrl, {
-      headers: xmlHeaders,
-      cache: "no-store",
-    });
-  }
+  const xmlHeaders: Record<string, string> = { ...BROWSER_HEADERS };
+  if (cookies) xmlHeaders["Cookie"] = cookies;
+  const xmlRes = await fetch(track.baseUrl, {
+    headers: xmlHeaders,
+    cache: "no-store",
+  });
   if (!xmlRes.ok) throw new Error(`Caption XML returned ${xmlRes.status}`);
 
   const xml = await xmlRes.text();
