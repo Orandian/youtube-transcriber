@@ -286,10 +286,13 @@ async function fetchViaInnerTube(
 }
 
 const INVIDIOUS_INSTANCES = [
+  "https://invidious.privacydev.net",
+  "https://iv.melmac.space",
+  "https://invidious.projectsegfau.lt",
   "https://inv.tux.pizza",
   "https://yt.artemislena.eu",
-  "https://invidious.slipfox.xyz",
-  "https://vid.puffyan.us",
+  "https://invidious.fdn.fr",
+  "https://invidious.nerdvpn.de",
 ];
 
 function parseVtt(
@@ -331,31 +334,41 @@ function parseVtt(
   return results;
 }
 
+async function tryOneInvidious(
+  instance: string,
+  videoId: string,
+): Promise<TranscriptLine[]> {
+  const listRes = await fetch(`${instance}/api/v1/captions/${videoId}`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!listRes.ok) throw new Error(`${instance} HTTP ${listRes.status}`);
+  const data = (await listRes.json()) as {
+    captions?: { label: string; language_code: string; url: string }[];
+  };
+  if (!Array.isArray(data.captions) || data.captions.length === 0)
+    throw new Error(`${instance} no captions`);
+  const cap =
+    data.captions.find((c) => c.language_code.startsWith("en")) ??
+    data.captions[0];
+  const vttRes = await fetch(`${instance}${cap.url}`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!vttRes.ok) throw new Error(`${instance} VTT ${vttRes.status}`);
+  const entries = parseVtt(await vttRes.text());
+  if (entries.length === 0) throw new Error(`${instance} empty VTT`);
+  console.log(`[useTranscript] invidious OK (${instance})`);
+  return toLines(entries);
+}
+
 async function fetchViaInvidious(
   videoId: string,
 ): Promise<TranscriptLine[] | null> {
-  for (const instance of INVIDIOUS_INSTANCES) {
-    try {
-      const listRes = await fetch(`${instance}/api/v1/captions/${videoId}`);
-      if (!listRes.ok) continue;
-      const data = (await listRes.json()) as {
-        captions?: { label: string; language_code: string; url: string }[];
-      };
-      if (!Array.isArray(data.captions) || data.captions.length === 0) continue;
-      const cap =
-        data.captions.find((c) => c.language_code.startsWith("en")) ??
-        data.captions[0];
-      const vttRes = await fetch(`${instance}${cap.url}`);
-      if (!vttRes.ok) continue;
-      const entries = parseVtt(await vttRes.text());
-      if (entries.length === 0) continue;
-      console.log(`[useTranscript] invidious OK (${instance})`);
-      return toLines(entries);
-    } catch {
-      continue;
-    }
-  }
-  return null;
+  return Promise.any(
+    INVIDIOUS_INSTANCES.map((inst) => tryOneInvidious(inst, videoId)),
+  ).catch((e) => {
+    console.warn("[useTranscript] all invidious failed:", e);
+    return null;
+  });
 }
 
 export function useTranscript(videoId: string) {

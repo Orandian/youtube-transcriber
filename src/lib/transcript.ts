@@ -289,13 +289,14 @@ async function tryWatchPage(
   }
 }
 
-// Invidious instances — open YouTube frontends with CORS-enabled APIs
-// that run on non-cloud residential-adjacent servers, bypassing IP blocks.
 const INVIDIOUS_INSTANCES = [
+  "https://invidious.privacydev.net",
+  "https://iv.melmac.space",
+  "https://invidious.projectsegfau.lt",
   "https://inv.tux.pizza",
   "https://yt.artemislena.eu",
-  "https://invidious.slipfox.xyz",
-  "https://vid.puffyan.us",
+  "https://invidious.fdn.fr",
+  "https://invidious.nerdvpn.de",
 ];
 
 function parseVtt(vtt: string): RawEntry[] {
@@ -335,47 +336,47 @@ function parseVtt(vtt: string): RawEntry[] {
   return results;
 }
 
+async function tryOneInvidious(
+  instance: string,
+  videoId: string,
+): Promise<TranscriptLine[]> {
+  const listRes = await fetch(`${instance}/api/v1/captions/${videoId}`, {
+    signal: AbortSignal.timeout(4000),
+    cache: "no-store",
+  });
+  if (!listRes.ok) throw new Error(`${instance} list ${listRes.status}`);
+  const data = (await listRes.json()) as {
+    captions?: { label: string; language_code: string; url: string }[];
+  };
+  if (!Array.isArray(data.captions) || data.captions.length === 0)
+    throw new Error(`${instance} no captions`);
+  const cap =
+    data.captions.find((c) => c.language_code.startsWith("en")) ??
+    data.captions[0];
+  const vttRes = await fetch(`${instance}${cap.url}`, {
+    signal: AbortSignal.timeout(4000),
+    cache: "no-store",
+  });
+  if (!vttRes.ok) throw new Error(`${instance} vtt ${vttRes.status}`);
+  const entries = parseVtt(await vttRes.text());
+  if (entries.length === 0) throw new Error(`${instance} empty vtt`);
+  console.log(`[transcript] invidious OK (${instance})`);
+  return entries.map(({ text, offsetMs, durationMs }) => {
+    const { speaker, cleanText } = detectSpeaker(text);
+    return {
+      text: cleanText,
+      offset: offsetMs,
+      duration: durationMs,
+      ...(speaker ? { speaker } : {}),
+    };
+  });
+}
+
 async function tryInvidious(videoId: string): Promise<TranscriptLine[] | null> {
-  for (const instance of INVIDIOUS_INSTANCES) {
-    try {
-      const listRes = await fetch(`${instance}/api/v1/captions/${videoId}`, {
-        signal: AbortSignal.timeout(5000),
-        cache: "no-store",
-      });
-      if (!listRes.ok) continue;
-      const data = (await listRes.json()) as {
-        captions?: { label: string; language_code: string; url: string }[];
-      };
-      if (!Array.isArray(data.captions) || data.captions.length === 0) continue;
-
-      const cap =
-        data.captions.find((c) => c.language_code.startsWith("en")) ??
-        data.captions[0];
-
-      const vttRes = await fetch(`${instance}${cap.url}`, {
-        signal: AbortSignal.timeout(5000),
-        cache: "no-store",
-      });
-      if (!vttRes.ok) continue;
-
-      const entries = parseVtt(await vttRes.text());
-      if (entries.length === 0) continue;
-
-      console.log(`[transcript] invidious OK (${instance})`);
-      return entries.map(({ text, offsetMs, durationMs }) => {
-        const { speaker, cleanText } = detectSpeaker(text);
-        return {
-          text: cleanText,
-          offset: offsetMs,
-          duration: durationMs,
-          ...(speaker ? { speaker } : {}),
-        };
-      });
-    } catch {
-      continue;
-    }
-  }
-  return null;
+  // Run all instances in parallel — first success wins
+  return Promise.any(
+    INVIDIOUS_INSTANCES.map((inst) => tryOneInvidious(inst, videoId)),
+  ).catch(() => null);
 }
 
 export async function fetchTranscript(
