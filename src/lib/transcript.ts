@@ -373,10 +373,42 @@ async function tryOneInvidious(
 }
 
 async function tryInvidious(videoId: string): Promise<TranscriptLine[] | null> {
-  // Run all instances in parallel — first success wins
   return Promise.any(
     INVIDIOUS_INSTANCES.map((inst) => tryOneInvidious(inst, videoId)),
-  ).catch(() => null);
+  ).catch((e: unknown) => {
+    const agg = e as { errors?: Error[] };
+    const msgs = (agg.errors ?? []).map((err) => err.message).join(" | ");
+    console.log(`[transcript] invidious all failed: ${msgs}`);
+    return null;
+  });
+}
+
+// Embed page — YouTube may be less restrictive here since embeds must work everywhere
+async function tryEmbedPage(videoId: string): Promise<CaptionTrack[] | null> {
+  try {
+    const res = await fetch(`https://www.youtube.com/embed/${videoId}?hl=en`, {
+      headers: { ...BROWSER_HEADERS, Referer: "https://www.youtube.com/" },
+      signal: AbortSignal.timeout(5000),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const player = parseInlineJson(html, "ytInitialPlayerResponse");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tracks = (player as any)?.captions?.playerCaptionsTracklistRenderer
+      ?.captionTracks;
+    if (!Array.isArray(tracks) || tracks.length === 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const status = (player as any)?.playabilityStatus?.status;
+      console.log(`[transcript] embed page playability=${status}`);
+      return null;
+    }
+    console.log(`[transcript] embed page tracks=${tracks.length}`);
+    return tracks;
+  } catch (e) {
+    console.log(`[transcript] embed page error: ${e}`);
+    return null;
+  }
 }
 
 export async function fetchTranscript(
@@ -385,12 +417,13 @@ export async function fetchTranscript(
   let tracks: CaptionTrack[] | null = null;
   let cookies = "";
 
-  // Run concurrently: InnerTube has 2.5s timeouts, timedtext list is fast.
-  const [it, ttResult] = await Promise.all([
+  // Run all server-side strategies concurrently
+  const [it, ttResult, embedTracks] = await Promise.all([
     tryInnerTube(videoId).catch(() => null),
     tryTimedTextList(videoId),
+    tryEmbedPage(videoId).catch(() => null),
   ]);
-  tracks = it ?? ttResult.tracks;
+  tracks = it ?? ttResult.tracks ?? embedTracks;
   const timedTextDebug = ttResult.debug;
 
   if (!tracks) {
