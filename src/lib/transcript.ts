@@ -96,6 +96,14 @@ export async function fetchTranscript(
   if (!playerRes.ok) throw new Error(`InnerTube returned ${playerRes.status}`);
 
   const player = await playerRes.json();
+  console.log(
+    "[transcript] playability:",
+    player?.playabilityStatus?.status,
+    "| tracks:",
+    player?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length ??
+      0,
+  );
+
   const tracks: { languageCode: string; baseUrl: string }[] =
     player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
 
@@ -117,7 +125,14 @@ export async function fetchTranscript(
   if (!xmlRes.ok) throw new Error(`Caption XML returned ${xmlRes.status}`);
 
   const xml = await xmlRes.text();
+  console.log(
+    "[transcript] xml length:",
+    xml.length,
+    "| preview:",
+    xml.substring(0, 80),
+  );
   const entries = parseCaptionXml(xml);
+  console.log("[transcript] parsed entries:", entries.length);
 
   if (entries.length === 0)
     throw new Error("No captions available for this video");
