@@ -169,6 +169,9 @@ function parseCookies(setCookieHeader: string | null): string {
 }
 
 async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
+  console.log(
+    `[transcript] clients to try: ${INNERTUBE_CLIENTS.length} (android_key=${!!YT_ANDROID_KEY}, web_key=${!!YT_WEB_KEY})`,
+  );
   for (const client of INNERTUBE_CLIENTS) {
     try {
       const res = await fetch(client.url, {
@@ -195,12 +198,21 @@ async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
         }),
         cache: "no-store",
       });
-      if (!res.ok) continue;
+      const host = new URL(client.url).hostname;
+      if (!res.ok) {
+        console.log(`[transcript] ${client.name}@${host} HTTP ${res.status}`);
+        continue;
+      }
       const data = await res.json();
-      const tracks =
-        data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      if (Array.isArray(tracks) && tracks.length > 0) return tracks;
-    } catch {
+      const playability = data?.playabilityStatus?.status;
+      const tracks: CaptionTrack[] =
+        data?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
+      console.log(
+        `[transcript] ${client.name}@${host} playability=${playability} tracks=${tracks.length}`,
+      );
+      if (tracks.length > 0) return tracks;
+    } catch (e) {
+      console.log(`[transcript] ${client.name} error: ${e}`);
       continue;
     }
   }
