@@ -1,5 +1,3 @@
-export const runtime = "edge";
-
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { fetchTranscript } from "@/lib/transcript";

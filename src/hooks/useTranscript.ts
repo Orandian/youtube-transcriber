@@ -30,7 +30,6 @@ function decodeEntities(str: string): string {
     .trim();
 }
 
-// YouTube json3 format: { events: [{ tStartMs, dDurationMs, segs: [{ utf8 }] }] }
 function parseJson3(
   data: unknown,
 ): { text: string; offsetMs: number; durationMs: number }[] {
@@ -112,7 +111,28 @@ function toLines(
   });
 }
 
-// Strategy A: timedtext GET (no signature, CORS-enabled, works for most public videos)
+// ── Strategy 1: our own API route (server-side proxy, no CORS, browser-safe) ──
+async function fetchViaApiRoute(
+  videoId: string,
+): Promise<TranscriptLine[] | null> {
+  try {
+    const r = await fetch(`/api/transcript?videoId=${videoId}`);
+    if (!r.ok) {
+      console.warn(`[useTranscript] API route ${r.status}`);
+      return null;
+    }
+    const data = await r.json();
+    if (Array.isArray(data.lines) && data.lines.length > 0) {
+      console.log("[useTranscript] API route OK");
+      return data.lines as TranscriptLine[];
+    }
+  } catch (e) {
+    console.warn("[useTranscript] API route error:", e);
+  }
+  return null;
+}
+
+// ── Strategy 2: timedtext GET directly from browser (CORS-enabled GET) ────────
 async function fetchTimedText(
   videoId: string,
 ): Promise<{ text: string; offsetMs: number; durationMs: number }[] | null> {
@@ -129,42 +149,71 @@ async function fetchTimedText(
       const data = await r.json();
       const entries = parseJson3(data);
       if (entries.length > 0) {
-        console.log(`[useTranscript] timedtext OK (${url})`);
+        console.log(`[useTranscript] timedtext OK`);
         return entries;
       }
     } catch (e) {
-      console.warn("[useTranscript] timedtext attempt failed:", url, e);
+      console.warn("[useTranscript] timedtext failed:", e);
     }
   }
   return null;
 }
 
-// Strategy B: InnerTube POST → get signed caption URL → fetch XML
+// ── Strategy 3: InnerTube from browser (googleapis.com has CORS) ──────────────
 async function fetchViaInnerTube(
   videoId: string,
 ): Promise<{ text: string; offsetMs: number; durationMs: number }[] | null> {
-  const INNERTUBE_URL =
-    "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
   const clients = [
+    // googleapis.com is the Google API domain — has CORS headers + different IP policy
     {
-      clientName: "WEB",
-      clientVersion: "2.20231219.04.00",
-      hl: "en",
-      gl: "US",
+      url: "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false",
+      ctx: {
+        clientName: "WEB",
+        clientVersion: "2.20231219.04.00",
+        hl: "en",
+        gl: "US",
+      },
     },
-    { clientName: "ANDROID", clientVersion: "20.10.38", hl: "en", gl: "US" },
+    {
+      url: "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false",
+      ctx: {
+        clientName: "ANDROID",
+        clientVersion: "20.10.38",
+        hl: "en",
+        gl: "US",
+      },
+    },
+    // www.youtube.com as final fallback
+    {
+      url: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+      ctx: {
+        clientName: "WEB",
+        clientVersion: "2.20231219.04.00",
+        hl: "en",
+        gl: "US",
+      },
+    },
+    {
+      url: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+      ctx: {
+        clientName: "ANDROID",
+        clientVersion: "20.10.38",
+        hl: "en",
+        gl: "US",
+      },
+    },
   ];
 
-  for (const client of clients) {
+  for (const { url, ctx } of clients) {
     try {
-      const r = await fetch(INNERTUBE_URL, {
+      const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ context: { client }, videoId }),
+        body: JSON.stringify({ context: { client: ctx }, videoId }),
       });
       if (!r.ok) {
         console.warn(
-          `[useTranscript] InnerTube ${client.clientName} HTTP ${r.status}`,
+          `[useTranscript] InnerTube ${ctx.clientName} HTTP ${r.status}`,
         );
         continue;
       }
@@ -173,7 +222,7 @@ async function fetchViaInnerTube(
         player?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
       if (!Array.isArray(tracks) || tracks.length === 0) {
         console.warn(
-          `[useTranscript] InnerTube ${client.clientName}: no tracks. playability:`,
+          `[useTranscript] InnerTube ${ctx.clientName}: no tracks. playability:`,
           player?.playabilityStatus?.status,
         );
         continue;
@@ -190,11 +239,11 @@ async function fetchViaInnerTube(
       const xml = await xmlRes.text();
       const entries = parseCaptionXml(xml);
       if (entries.length > 0) {
-        console.log(`[useTranscript] InnerTube ${client.clientName} OK`);
+        console.log(`[useTranscript] InnerTube ${ctx.clientName} OK`);
         return entries;
       }
     } catch (e) {
-      console.warn(`[useTranscript] InnerTube ${client.clientName} error:`, e);
+      console.warn(`[useTranscript] InnerTube ${ctx.clientName} error:`, e);
     }
   }
   return null;
@@ -212,7 +261,15 @@ export function useTranscript(videoId: string) {
       setLines([]);
 
       try {
-        // Try timedtext first (simple GET, known CORS, no signed URL needed)
+        // 1. Server-side proxy via our API route (no CORS, server can use any headers)
+        const apiLines = await fetchViaApiRoute(videoId);
+        if (!cancelled && apiLines && apiLines.length > 0) {
+          setLines(apiLines);
+          setStatus("ready");
+          return;
+        }
+
+        // 2. Browser-direct timedtext (simple GET, CORS-enabled)
         const timedTextEntries = await fetchTimedText(videoId);
         if (!cancelled && timedTextEntries && timedTextEntries.length > 0) {
           setLines(toLines(timedTextEntries));
@@ -220,7 +277,7 @@ export function useTranscript(videoId: string) {
           return;
         }
 
-        // Fall back to InnerTube signed URL approach
+        // 3. Browser-direct InnerTube via googleapis.com (has CORS headers)
         const innerTubeEntries = await fetchViaInnerTube(videoId);
         if (cancelled) return;
         if (innerTubeEntries && innerTubeEntries.length > 0) {

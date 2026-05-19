@@ -1,8 +1,5 @@
 import type { TranscriptLine } from "@/types/transcript";
 
-const INNERTUBE_URL =
-  "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
-
 const BROWSER_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -10,10 +7,34 @@ const BROWSER_HEADERS = {
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 };
 
+// googleapis.com is Google's public API domain — different IP policy than www.youtube.com,
+// accepts requests from any IP without LOGIN_REQUIRED.
 const INNERTUBE_CLIENTS = [
-  { name: "ANDROID", version: "20.10.38" },
-  { name: "IOS", version: "19.45.4" },
-  { name: "WEB", version: "2.20231010.04.01" },
+  {
+    url: "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false",
+    name: "GOOGLEAPIS_WEB",
+    version: "2.20231219.04.00",
+  },
+  {
+    url: "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false",
+    name: "GOOGLEAPIS_ANDROID",
+    version: "20.10.38",
+  },
+  {
+    url: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+    name: "WEB",
+    version: "2.20231010.04.01",
+  },
+  {
+    url: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+    name: "ANDROID",
+    version: "20.10.38",
+  },
+  {
+    url: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+    name: "IOS",
+    version: "19.45.4",
+  },
 ];
 
 const SPEAKER_REGEX = /^\[([^\]]+)\]:\s*|^([A-Z][a-zA-Z\s]+):\s+/;
@@ -123,11 +144,12 @@ function parseCookies(setCookieHeader: string | null): string {
     .join("; ");
 }
 
-// ── Strategy 1: InnerTube API (fast, works for most videos) ──────────────────
+// ── Strategy 1: InnerTube API ─────────────────────────────────────────────────
 async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
   for (const client of INNERTUBE_CLIENTS) {
     try {
-      const res = await fetch(INNERTUBE_URL, {
+      const clientName = client.name.replace("GOOGLEAPIS_", "");
+      const res = await fetch(client.url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -136,7 +158,7 @@ async function tryInnerTube(videoId: string): Promise<CaptionTrack[] | null> {
         body: JSON.stringify({
           context: {
             client: {
-              clientName: client.name,
+              clientName,
               clientVersion: client.version,
               hl: "en",
               gl: "US",
