@@ -344,10 +344,14 @@ async function tryOneInvidious(
     signal: AbortSignal.timeout(4000),
     cache: "no-store",
   });
+  console.log(`[transcript] ${instance} list status=${listRes.status}`);
   if (!listRes.ok) throw new Error(`${instance} list ${listRes.status}`);
   const data = (await listRes.json()) as {
     captions?: { label: string; language_code: string; url: string }[];
   };
+  console.log(
+    `[transcript] ${instance} captions=${data.captions?.length ?? 0} langs=${data.captions?.map((c) => c.language_code).join(",")}`,
+  );
   if (!Array.isArray(data.captions) || data.captions.length === 0)
     throw new Error(`${instance} no captions`);
   const cap =
@@ -372,15 +376,22 @@ async function tryOneInvidious(
   });
 }
 
-async function tryInvidious(videoId: string): Promise<TranscriptLine[] | null> {
+async function tryInvidious(
+  videoId: string,
+): Promise<{ lines: TranscriptLine[] | null; debug: string }> {
   return Promise.any(
     INVIDIOUS_INSTANCES.map((inst) => tryOneInvidious(inst, videoId)),
-  ).catch((e: unknown) => {
-    const agg = e as { errors?: Error[] };
-    const msgs = (agg.errors ?? []).map((err) => err.message).join(" | ");
-    console.log(`[transcript] invidious all failed: ${msgs}`);
-    return null;
-  });
+  )
+    .then((lines) => ({ lines, debug: "invidious_ok" }))
+    .catch((e: unknown) => {
+      const agg = e as { errors?: Error[] };
+      const msgs = (agg.errors ?? [])
+        .slice(0, 5)
+        .map((err) => err.message)
+        .join(" | ");
+      console.log(`[transcript] invidious all failed: ${msgs}`);
+      return { lines: null, debug: `inv_fail: ${msgs.slice(0, 120)}` };
+    });
 }
 
 // Embed page — YouTube may be less restrictive here since embeds must work everywhere
@@ -434,14 +445,16 @@ export async function fetchTranscript(
     }
   }
 
+  let invDebug = "";
   if (!tracks) {
-    const inv = await tryInvidious(videoId);
+    const { lines: inv, debug } = await tryInvidious(videoId);
+    invDebug = debug;
     if (inv) return inv;
   }
 
   if (!tracks)
     throw new Error(
-      `No captions available. keys=${YT_ANDROID_KEY ? "android" : ""}${YT_WEB_KEY ? "+web" : ""} ${timedTextDebug}`,
+      `No captions available. keys=${YT_ANDROID_KEY ? "android" : ""}${YT_WEB_KEY ? "+web" : ""} ${timedTextDebug} | ${invDebug}`,
     );
 
   const track =
