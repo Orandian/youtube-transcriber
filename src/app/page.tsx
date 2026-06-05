@@ -1,3 +1,5 @@
+export const runtime = "edge";
+
 import { UrlForm } from "@/components/UrlForm";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
