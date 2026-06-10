@@ -126,6 +126,7 @@ async function fetchViaApiRoute(
       console.log("[useTranscript] API route OK");
       return data.lines as TranscriptLine[];
     }
+    console.warn("[useTranscript] API route: empty lines", data);
   } catch (e) {
     console.warn("[useTranscript] API route error:", e);
   }
@@ -168,7 +169,14 @@ async function fetchTimedText(
       const url = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${lang}${kind ? "&kind=" + kind : ""}&name=&fmt=json3`;
       const r = await fetch(url);
       if (!r.ok) continue;
-      const data = await r.json();
+      const text = await r.text();
+      if (!text.trim()) continue;
+      let data: unknown;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        continue;
+      }
       const entries = parseJson3(data);
       if (entries.length > 0) {
         console.log(`[useTranscript] timedtext OK lang=${lang}`);
@@ -298,7 +306,9 @@ async function fetchViaInnerTube(
         tracks.find(
           (t) => t.languageCode === "en" || t.languageCode === "en-US",
         ) ?? tracks[0];
-      const xmlRes = await fetch(track.baseUrl);
+      // Proxy the caption XML through our server to avoid CORS / empty-body issues
+      const captionUrl = `/api/caption-proxy?url=${encodeURIComponent(track.baseUrl)}`;
+      const xmlRes = await fetch(captionUrl);
       if (!xmlRes.ok) {
         console.warn(`[useTranscript] caption XML ${xmlRes.status}`);
         continue;
